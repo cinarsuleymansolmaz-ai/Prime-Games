@@ -2436,6 +2436,18 @@
     </div>
 
     <script>
+    // ==================== API BAGLANTISI ====================
+    // Backend sunucunun adresi - Render'da backend'i deploy ettikten sonra buraya yapistir
+    const API_BASE = 'https://prime-games-backend.onrender.com/api';
+    async function apiCall(endpoint, method = 'GET', body = null) {
+        const opts = { method, headers: { 'Content-Type': 'application/json' } };
+        if (body) opts.body = JSON.stringify(body);
+        const res = await fetch(API_BASE + endpoint, opts);
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || 'Sunucu hatasi');
+        return data;
+    }
+
     // ==================== PARTICLES ====================
     const canvas = document.getElementById('particles-canvas');
     const ctx = canvas.getContext('2d');
@@ -2590,33 +2602,8 @@
         users: [],
         currentUser: null,
         init() {
-            this.loadUsers();
             this.loadSession();
             this.updateNav();
-        },
-        loadUsers() {
-            try { const stored = localStorage.getItem('primeGamesUsers'); if (stored) this.users = JSON.parse(stored); }
-            catch(e) {}
-            if (!this.users.some(u => u.email === 'admin@primegames.com')) {
-                const now = new Date();
-                this.users.push({
-                    id: 999999,
-                    name: 'Prime Admin',
-                    email: 'admin@primegames.com',
-                    password: 'admin123',
-                    createdAt: now.toISOString(),
-                    createdDate: now.toLocaleDateString('tr-TR'),
-                    createdTime: now.toLocaleTimeString('tr-TR'),
-                    username: 'admin',
-                    bio: 'Prime Games Kurucusu ve Baş Yöneticisi',
-                    tier: 'Kurucu',
-                    role: 'admin'
-                });
-                this.saveUsers();
-            }
-        },
-        saveUsers() {
-            try { localStorage.setItem('primeGamesUsers', JSON.stringify(this.users)); } catch(e) {}
         },
         loadSession() {
             try { const session = localStorage.getItem('primeGamesSession'); if (session) this.currentUser = JSON.parse(session); }
@@ -2648,17 +2635,20 @@
             if (!this.currentUser) { AuthModal.open('login'); return; }
             callback();
         },
-        login(e) {
+        async login(e) {
             e.preventDefault();
             const email = document.getElementById('loginEmail').value.trim().toLowerCase();
             const password = document.getElementById('loginPassword').value;
             document.querySelectorAll('#loginForm .form-error-msg').forEach(el => el.classList.remove('show'));
-            const user = this.users.find(u => u.email === email && u.password === password);
-            if (!user) {
+            let data;
+            try {
+                data = await apiCall('/login', 'POST', { email, password });
+            } catch (err) {
                 document.getElementById('loginEmailError').textContent = 'E-posta veya sifre hatali';
                 document.getElementById('loginEmailError').classList.add('show');
                 return;
             }
+            const user = data.user;
             this.currentUser = { ...user, remember: document.getElementById('loginRemember').checked };
             this.saveSession();
             this.updateNav();
@@ -2673,7 +2663,7 @@
                 document.getElementById('loginForm').reset();
             }, 1500);
         },
-        register(e) {
+        async register(e) {
             e.preventDefault();
             const name = document.getElementById('regName').value.trim();
             const email = document.getElementById('regEmail').value.trim().toLowerCase();
@@ -2688,23 +2678,13 @@
             if (password !== passwordConfirm) { document.getElementById('regPasswordConfirmError').classList.add('show'); hasError = true; }
             if (!terms) { document.getElementById('regTermsError').classList.add('show'); hasError = true; }
             if (hasError) return;
-            if (this.users.find(u => u.email === email)) {
-                document.getElementById('regEmailError').textContent = 'Bu e-posta ile kayitli bir hesap var';
+            try {
+                await apiCall('/register', 'POST', { name, email, password });
+            } catch (err) {
+                document.getElementById('regEmailError').textContent = err.message || 'Bu e-posta ile kayitli bir hesap var';
                 document.getElementById('regEmailError').classList.add('show');
                 return;
             }
-            const now = new Date();
-            const newUser = {
-                id: Date.now(), name, email, password,
-                createdAt: now.toISOString(),
-                createdDate: now.toLocaleDateString('tr-TR'),
-                createdTime: now.toLocaleTimeString('tr-TR'),
-                username: email.split('@')[0],
-                bio: '',
-                tier: 'Standart'
-            };
-            this.users.push(newUser);
-            this.saveUsers();
             document.getElementById('registerSuccess').classList.add('show');
             document.getElementById('regSubmit').disabled = true;
             Toast.show('Hesap Olusturuldu!', 'Simdi giris yapabilirsiniz.', 'success');
@@ -2731,13 +2711,13 @@
     // ==================== SERVER SYSTEM ====================
     const ServerSystem = {
         servers: [],
-        init() {
-            try { const stored = localStorage.getItem('primeGamesServers'); if (stored) this.servers = JSON.parse(stored); } catch(e) {}
+        async init() {
+            try {
+                const raw = await apiCall('/servers');
+                this.servers = raw.map(s => ({ ...s, userId: s.user_id, userEmail: s.user_email, maxPlayers: s.max_players, purchasedAt: s.purchased_at }));
+            } catch(e) { this.servers = []; }
         },
-        save() {
-            try { localStorage.setItem('primeGamesServers', JSON.stringify(this.servers)); } catch(e) {}
-        },
-        purchase(planName, price, gameType) {
+        async purchase(planName, price, gameType) {
             if (!AuthSystem.currentUser) { AuthModal.open('login'); return; }
             const serverNames = gameType === 'minecraft'
                 ? ['AuroraCraft', 'PixelRealm', 'BlockVerse', 'Craftopia', 'MineHaven']
@@ -2755,18 +2735,21 @@
                 uptime: Math.floor(Math.random() * 30) + 1,
                 ip: gameType === 'minecraft' ? 'mc.primegames.net:' + (25565 + Math.floor(Math.random() * 100)) : 'connect.primegames.net:' + (30120 + Math.floor(Math.random() * 100)),
                 version: gameType === 'minecraft' ? '1.20.4' : 'FXServer 7290',
-                purchasedAt: new Date().toISOString(),
                 userId: AuthSystem.currentUser.id,
                 userEmail: AuthSystem.currentUser.email
             };
-            this.servers.push(server);
-            this.save();
-            Toast.show('Sunucu Satin Alindi!', `${server.name} basariyla olusturuldu.`, 'success');
-            PageRouter.go('servers');
+            try {
+                await apiCall('/servers', 'POST', server);
+                this.servers.unshift({ ...server, purchased_at: new Date().toISOString(), user_id: server.userId, max_players: server.maxPlayers });
+                Toast.show('Sunucu Satin Alindi!', `${server.name} basariyla olusturuldu.`, 'success');
+                PageRouter.go('servers');
+            } catch (e) {
+                Toast.show('Hata', 'Sunucu olusturulamadi, tekrar deneyin.', 'error');
+            }
         },
         getUserServers() {
             if (!AuthSystem.currentUser) return [];
-            return this.servers.filter(s => s.userId === AuthSystem.currentUser.id);
+            return this.servers.filter(s => (s.userId || s.user_id) == AuthSystem.currentUser.id);
         }
     };
 
@@ -3061,26 +3044,20 @@
             { id: 8, name: "Omer Koc", email: "omer@example.com", rating: 3, service: "volunteer", text: "Gonullu destek aldim ama biraz beklemem gerekti. Sonucta sorunum cozuldu ama hiz biraz yavas olabilir.", time: "4 gun once", avatar: "OK", verified: true },
         ],
         reviewedEmails: new Set(),
-        init() {
-            this.loadFromStorage();
+        async init() {
+            await this.loadFromServer();
             this.renderReviews();
             this.updateStats();
             this.setupForm();
-            this.startLiveSimulation();
             this.checkUserReviewed();
         },
-        loadFromStorage() {
+        async loadFromServer() {
             try {
-                const stored = localStorage.getItem('primeGamesReviews');
-                const storedEmails = localStorage.getItem('primeGamesReviewedEmails');
-                if (stored) this.reviews = JSON.parse(stored);
-                if (storedEmails) this.reviewedEmails = new Set(JSON.parse(storedEmails));
-            } catch(e) {}
-        },
-        saveToStorage() {
-            try {
-                localStorage.setItem('primeGamesReviews', JSON.stringify(this.reviews));
-                localStorage.setItem('primeGamesReviewedEmails', JSON.stringify([...this.reviewedEmails]));
+                const data = await apiCall('/reviews');
+                if (data.length > 0) {
+                    this.reviews = data.map(r => ({ ...r, time: r.time || (r.created_at ? new Date(r.created_at).toLocaleDateString('tr-TR') : '') }));
+                    this.reviewedEmails = new Set(data.map(r => r.email));
+                }
             } catch(e) {}
         },
         getServiceName(value) {
@@ -3116,7 +3093,6 @@
             review.id = Date.now(); review.time = "simdi"; review.verified = true;
             this.reviews.unshift(review);
             if (this.reviews.length > 50) this.reviews.pop();
-            this.saveToStorage();
             this.renderReviews();
             this.updateStats();
             this.updateRatingBars();
@@ -3148,7 +3124,7 @@
                 this.handleSubmit();
             });
         },
-        handleSubmit() {
+        async handleSubmit() {
             const name = document.getElementById('reviewName').value.trim();
             const email = document.getElementById('reviewEmail').value.trim().toLowerCase();
             const ratingEl = document.querySelector('input[name="rating"]:checked');
@@ -3167,9 +3143,14 @@
             }
             const rating = parseInt(ratingEl.value);
             const avatar = name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
+            try {
+                await apiCall('/reviews', 'POST', { name, email, rating, service, text, avatar });
+            } catch (e) {
+                Toast.show('Hata', e.message || 'Yorum gonderilemedi.', 'error');
+                return;
+            }
             this.reviewedEmails.add(email);
             this.addReview({ name, email, rating, service, text, avatar });
-            this.saveToStorage();
             document.getElementById('formSuccess').classList.add('show');
             document.getElementById('reviewForm').reset();
             Toast.show('Yorum Gonderildi', 'Yorumunuz basariyla gonderildi!', 'success');
@@ -3238,19 +3219,14 @@
                 time: "11:15"
             }
         ],
-        init() {
-            this.load();
+        async init() {
+            await this.load();
             this.render();
         },
-        load() {
+        async load() {
             try {
-                const stored = localStorage.getItem('primeGamesAnnouncements');
-                if (stored) this.announcements = JSON.parse(stored);
-            } catch(e) {}
-        },
-        saveToStorage() {
-            try {
-                localStorage.setItem('primeGamesAnnouncements', JSON.stringify(this.announcements));
+                const data = await apiCall('/announcements');
+                if (data.length > 0) this.announcements = data;
             } catch(e) {}
         },
         render() {
@@ -3328,7 +3304,7 @@
             const modalTitle = document.getElementById('annModalTitle');
 
             if (id) {
-                const ann = this.announcements.find(a => a.id === id);
+                const ann = this.announcements.find(a => a.id == id);
                 if (!ann) return;
                 modalTitle.textContent = 'Duyuru Düzenle';
                 idInput.value = ann.id;
@@ -3352,7 +3328,7 @@
                 document.body.style.overflow = '';
             }, 300);
         },
-        save(e) {
+        async save(e) {
             e.preventDefault();
             const id = document.getElementById('annId').value;
             const title = document.getElementById('annTitle').value.trim();
@@ -3363,47 +3339,34 @@
                 Toast.show('Hata', 'Lütfen tüm alanları doldurun.', 'error');
                 return;
             }
+            const author = AuthSystem.currentUser ? AuthSystem.currentUser.name : 'Yönetici';
 
-            const now = new Date();
-            const dateStr = now.toLocaleDateString('tr-TR');
-            const timeStr = now.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
-
-            if (id) {
-                // Edit mode
-                const index = this.announcements.findIndex(a => a.id === parseInt(id));
-                if (index >= 0) {
-                    this.announcements[index].title = title;
-                    this.announcements[index].category = category;
-                    this.announcements[index].content = content;
-                    this.announcements[index].date = dateStr;
-                    this.announcements[index].time = timeStr + ' (Güncellendi)';
+            try {
+                if (id) {
+                    await apiCall('/announcements/' + id, 'PUT', { title, category, content });
+                    Toast.show('Duyuru Güncellendi', 'Duyuru başarıyla güncellendi.', 'success');
+                } else {
+                    await apiCall('/announcements', 'POST', { title, category, content, author });
+                    Toast.show('Duyuru Eklendi', 'Yeni duyuru başarıyla yayınlandı.', 'success');
                 }
-                Toast.show('Duyuru Güncellendi', 'Duyuru başarıyla güncellendi.', 'success');
-            } else {
-                // Add mode
-                const newAnn = {
-                    id: Date.now(),
-                    title,
-                    category,
-                    content,
-                    author: AuthSystem.currentUser ? AuthSystem.currentUser.name : 'Yönetici',
-                    date: dateStr,
-                    time: timeStr
-                };
-                this.announcements.unshift(newAnn);
-                Toast.show('Duyuru Eklendi', 'Yeni duyuru başarıyla yayınlandı.', 'success');
+            } catch (err) {
+                Toast.show('Hata', 'Duyuru kaydedilemedi.', 'error');
+                return;
             }
-
-            this.saveToStorage();
+            await this.load();
             this.render();
             this.closeModal();
         },
-        delete(id) {
+        async delete(id) {
             if (confirm('Bu duyuruyu silmek istediğinize emin misiniz?')) {
-                this.announcements = this.announcements.filter(a => a.id !== id);
-                this.saveToStorage();
-                this.render();
-                Toast.show('Duyuru Silindi', 'Duyuru başarıyla silindi.', 'success');
+                try {
+                    await apiCall('/announcements/' + id, 'DELETE');
+                    await this.load();
+                    this.render();
+                    Toast.show('Duyuru Silindi', 'Duyuru başarıyla silindi.', 'success');
+                } catch (err) {
+                    Toast.show('Hata', 'Duyuru silinemedi.', 'error');
+                }
             }
         }
     };
@@ -3436,11 +3399,11 @@
     fadeElements.forEach(el => fadeObserver.observe(el));
 
     // ==================== INIT ====================
-    document.addEventListener('DOMContentLoaded', () => {
+    document.addEventListener('DOMContentLoaded', async () => {
         AuthSystem.init();
-        ServerSystem.init();
-        ReviewsSystem.init();
-        AnnouncementsSystem.init();
+        await ServerSystem.init();
+        await ReviewsSystem.init();
+        await AnnouncementsSystem.init();
     });
     </script>
 </body>
